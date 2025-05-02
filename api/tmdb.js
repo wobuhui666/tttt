@@ -1,5 +1,6 @@
 const axios = require('axios');
 const TMDB_BASE_URL = 'https://api.themoviedb.org';
+const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/original';
 
 // 创建缓存对象
 const cache = new Map();
@@ -50,6 +51,21 @@ module.exports = async (req, res) => {
 
     try {
         const fullPath = req.url;
+
+        // 如果请求路径以 /t/p/original/ 开头（处理图片请求）
+        if (fullPath.startsWith('/t/p/original/')) {
+            const imagePath = fullPath.replace('/t/p/original/', ''); // 提取图片路径
+            const tmdbImageUrl = `${TMDB_IMAGE_BASE_URL}/${imagePath}`; // 构建 TMDB 图片 URL
+
+            // 下载图片并将其流式返回
+            const response = await axios.get(tmdbImageUrl, { responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type']); // 设置响应的内容类型
+            res.setHeader('Cache-Control', 'public, max-age=31536000'); // 设置缓存 headers
+            response.data.pipe(res); // 将图片流直接返回
+            return;
+        }
+
+        // 处理其他 TMDB API 请求（原功能）
         const authHeader = req.headers.authorization;
 
         // 缓存键只使用请求路径
@@ -105,4 +121,4 @@ module.exports = async (req, res) => {
             details: error.response?.data
         });
     }
-}; 
+};
