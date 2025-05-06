@@ -9,7 +9,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // 更新模型名称为 gemini-1.5-flash-latest
 const GEMINI_MODEL_NAME = 'gemini-2.0-flash'; // 或者您指定的其他 Flash 模型
-const GEMINI_API_ENDPOINT gemini-2.0-flash= `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
 
 const GEMINI_FORMATTING_PATHS = [
     '/3/search/movie',
