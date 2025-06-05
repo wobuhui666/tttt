@@ -1,4 +1,3 @@
-const axios = require('axios');
 const TMDB_BASE_URL = 'https://api.themoviedb.org';
 const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/original';
 
@@ -6,19 +5,18 @@ const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/original';
 const CACHE_DURATION = parseInt(process.env.CACHE_DURATION_MS, 10) || 10 * 60 * 1000;
 const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE, 10) || 1000;
 
-// --- Gemini API Configuration ---
+// --- Primary OpenAI-Compatible API Configuration ---
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL;
+const OPENAI_MODEL_NAME = process.env.OPENAI_MODEL_NAME;
+const OPENAI_API_ENDPOINT = OPENAI_API_BASE_URL ? `${OPENAI_API_BASE_URL}/chat/completions` : null;
+
+// --- Fallback Gemini API Configuration ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// 更新模型名称为 gemini-1.5-flash-latest 或其他
-const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || 'gemini-2.0-flash'; // 从环境变量读取，提供默认值
-const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_MODEL_NAME = process.env.GEMINI_MODEL_NAME || 'gemini-2.0-flash';
+const GEMINI_API_ENDPOINT = GEMINI_API_KEY ? `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}` : null; // 只有设置了Key才构建 Endpoint
 
-// --- Fallback OpenAI-Compatible API Configuration ---
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // 备用 API Key
-const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL; // 备用 API Base URL (例如: https://api.openai.com/v1 或 https://api.groq.com/openai/v1)
-const OPENAI_MODEL_NAME = process.env.OPENAI_MODEL_NAME; // 备用 API 模型名称 (例如: gpt-3.5-turbo, llama3-8b-8192)
-const OPENAI_API_ENDPOINT = OPENAI_API_BASE_URL ? `${OPENAI_API_BASE_URL}/chat/completions` : null; // 构建备用 API 端点
-
-const GEMINI_FORMATTING_PATHS = [
+const AI_FORMATTING_PATHS = [ // 重命名以反映通用性
     '/3/search/movie',
     '/3/search/tv',
     '/3/search/multi',
@@ -53,7 +51,7 @@ function checkCacheSizeAndEvict() {
 }
 setInterval(cleanExpiredCache, CACHE_DURATION);
 
-// --- Shared Prompt for Title Cleaning ---
+// --- Shared Prompt for Title Cleaning (无变化) ---
 const CLEAN_TITLE_PROMPT = `请从以下影视搜索词中提取最核心的标题。务必移除所有与核心标题无关的附加信息，包括但不限于：
 - 年份信息（如“(2023)”，“（1998）”）
 - 季数信息（如“第一季”、“第二季”、“S01”、“Season 2”）
@@ -81,28 +79,23 @@ const CLEAN_TITLE_PROMPT = `请从以下影视搜索词中提取最核心的标�
 
 请直接返回处理后的文本，不要添加任何解释或多余的文字。
 
-需要处理的文本是：`; // 注意：这里末尾没有输入文本，将在调用时添加
+需要处理的文本是：`;
 
-// --- Fallback OpenAI-Compatible API Call Function ---
+// --- Primary OpenAI-Compatible API Call Function ---
 async function callOpenAICompatibleAPI(textToFormat) {
     if (!OPENAI_API_KEY || !OPENAI_API_ENDPOINT || !OPENAI_MODEL_NAME) {
-        console.warn('[Fallback API] OpenAI compatible API credentials or endpoint not set. Skipping fallback.');
-        return textToFormat; // 如果备用 API 未配置，直接返回原文
+        console.warn('[Primary AI] OpenAI compatible API credentials or endpoint not set. Cannot process.');
+        return textToFormat; // 返回原始文本表示无法处理
     }
 
-    console.log(`[Fallback API - ${OPENAI_MODEL_NAME}] Requesting core title extraction for: "${textToFormat}"`);
+    console.log(`[Primary AI - ${OPENAI_MODEL_NAME}] Requesting core title extraction for: "${textToFormat}"`);
     try {
         const requestBody = {
             model: OPENAI_MODEL_NAME,
             messages: [
-                // 可以选择性地添加 system message 来强化指令
-                // {
-                //   "role": "system",
-                //   "content": "You are an assistant that extracts the core title from movie/TV show search terms, removing all extra information like year, season, episode, quality, etc."
-                // },
                 {
                     "role": "user",
-                    "content": `${CLEAN_TITLE_PROMPT} "${textToFormat}"` // 将提示和待处理文本结合
+                    "content": `${CLEAN_TITLE_PROMPT} "${textToFormat}"`
                 }
             ],
             temperature: 0.1,
@@ -112,52 +105,56 @@ async function callOpenAICompatibleAPI(textToFormat) {
         const response = await axios.post(OPENAI_API_ENDPOINT, requestBody, {
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${OPENAI_API_KEY}` // 使用 Bearer Token
-            }
+                'Authorization': `Bearer ${OPENAI_API_KEY}`
+            },
+            timeout: 15000 // 添加超时设置 (15秒)
         });
 
         if (response.data && response.data.choices && response.data.choices[0] &&
             response.data.choices[0].message && response.data.choices[0].message.content) {
             let formattedText = response.data.choices[0].message.content.trim();
-            formattedText = formattedText.replace(/^["']|["']$/g, ''); // 移除可能的引号
-            console.log(`[Fallback API - ${OPENAI_MODEL_NAME}] Core title result: "${formattedText}"`);
-            return formattedText;
+            formattedText = formattedText.replace(/^["']|["']$/g, '');
+            // 检查是否真的提取了内容，而不是返回空字符串或仅有标点
+            if (formattedText && formattedText.length > 0) {
+                 console.log(`[Primary AI - ${OPENAI_MODEL_NAME}] Core title result: "${formattedText}"`);
+                 return formattedText;
+            } else {
+                 console.warn(`[Primary AI - ${OPENAI_MODEL_NAME}] Received empty or invalid content:`, response.data.choices[0].message.content);
+                 return textToFormat; // 返回原始文本表示处理失败
+            }
         } else {
-            console.error(`[Fallback API - ${OPENAI_MODEL_NAME}] Unexpected response structure or empty content:`, response.data.choices ? response.data.choices[0] : response.data);
-            return textToFormat; // 备用 API 返回结构异常，返回原文
+            console.error(`[Primary AI - ${OPENAI_MODEL_NAME}] Unexpected response structure or empty content:`, response.data.choices ? response.data.choices[0] : response.data);
+            return textToFormat; // 返回原始文本表示处理失败
         }
     } catch (error) {
         const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-        console.error(`[Fallback API - ${OPENAI_MODEL_NAME}] Error calling API:`, errorMessage);
-        return textToFormat; // 备用 API 调用出错，返回原文
+        console.error(`[Primary AI - ${OPENAI_MODEL_NAME}] Error calling API:`, errorMessage);
+        return textToFormat; // 返回原始文本表示处理失败
     }
 }
 
 
-// --- Google Gemini API Call Function (with Fallback Logic) ---
+// --- Fallback Google Gemini API Call Function ---
 async function callGoogleGeminiAPI(textToFormat) {
-    if (!GEMINI_API_KEY) {
-        console.warn('[Gemini API] GEMINI_API_KEY is not set. Attempting fallback...');
-        return await callOpenAICompatibleAPI(textToFormat); // 主 API Key 未设置，尝试备用
-    }
-    if (!GEMINI_MODEL_NAME) {
-        console.warn('[Gemini API] GEMINI_MODEL_NAME is not set in config. Attempting fallback...');
-        return await callOpenAICompatibleAPI(textToFormat); // 主 API 模型未设置，尝试备用
+    // 检查 Gemini 配置是否完整
+    if (!GEMINI_API_KEY || !GEMINI_MODEL_NAME || !GEMINI_API_ENDPOINT) {
+        console.warn('[Fallback AI] Gemini API credentials or endpoint not set. Cannot process.');
+        return textToFormat; // 返回原始文本表示无法处理
     }
 
-    console.log(`[Gemini API - ${GEMINI_MODEL_NAME}] Requesting core title extraction for: "${textToFormat}"`);
+    console.log(`[Fallback AI - ${GEMINI_MODEL_NAME}] Requesting core title extraction for: "${textToFormat}"`);
     try {
         const requestBody = {
             contents: [{
                 parts: [{
-                    text: `${CLEAN_TITLE_PROMPT} "${textToFormat}"` // 使用共享提示
+                    text: `${CLEAN_TITLE_PROMPT} "${textToFormat}"`
                 }]
             }],
             generationConfig: {
               temperature: 0.1,
               maxOutputTokens: 80,
             },
-            safetySettings: [ // 安全设置保持不变
+            safetySettings: [
               { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
               { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
               { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
@@ -166,28 +163,36 @@ async function callGoogleGeminiAPI(textToFormat) {
         };
 
         const response = await axios.post(GEMINI_API_ENDPOINT, requestBody, {
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 15000 // 添加超时设置 (15秒)
         });
 
         if (response.data && response.data.candidates && response.data.candidates[0] &&
             response.data.candidates[0].content && response.data.candidates[0].content.parts &&
             response.data.candidates[0].content.parts[0] && response.data.candidates[0].content.parts[0].text) {
             let formattedText = response.data.candidates[0].content.parts[0].text.trim();
-            formattedText = formattedText.replace(/^["']|["']$/g, ''); // 移除可能的引号
-            console.log(`[Gemini API - ${GEMINI_MODEL_NAME}] Core title result: "${formattedText}"`);
-            return formattedText;
+            formattedText = formattedText.replace(/^["']|["']$/g, '');
+            // 检查是否真的提取了内容
+             if (formattedText && formattedText.length > 0) {
+                 console.log(`[Fallback AI - ${GEMINI_MODEL_NAME}] Core title result: "${formattedText}"`);
+                 return formattedText;
+            } else {
+                 console.warn(`[Fallback AI - ${GEMINI_MODEL_NAME}] Received empty or invalid content:`, response.data.candidates[0].content.parts[0].text);
+                 return textToFormat; // 返回原始文本表示处理失败
+            }
         } else {
-            // Gemini 返回了数据，但结构不符合预期或内容为空
-            console.error(`[Gemini API - ${GEMINI_MODEL_NAME}] Unexpected response structure or empty content:`, response.data.candidates ? response.data.candidates[0] : response.data);
-            console.log(`[Gemini API] Gemini response issue. Attempting fallback API for: "${textToFormat}"`);
-            return await callOpenAICompatibleAPI(textToFormat); // 尝试备用 API
+            console.error(`[Fallback AI - ${GEMINI_MODEL_NAME}] Unexpected response structure or empty content:`, response.data.candidates ? response.data.candidates[0] : response.data);
+            return textToFormat; // 返回原始文本表示处理失败
         }
     } catch (error) {
-        // Gemini API 调用直接出错 (网络问题、认证失败等)
         const errorMessage = error.response ? JSON.stringify(error.response.data) : error.message;
-        console.error(`[Gemini API - ${GEMINI_MODEL_NAME}] Error calling API:`, errorMessage);
-        console.log(`[Gemini API] Gemini request failed. Attempting fallback API for: "${textToFormat}"`);
-        return await callOpenAICompatibleAPI(textToFormat); // 尝试备用 API
+        console.error(`[Fallback AI - ${GEMINI_MODEL_NAME}] Error calling API:`, errorMessage);
+        // 特别处理 CONSUMER_SUSPENDED 错误，避免不必要的日志刷屏
+        if (errorMessage.includes("CONSUMER_SUSPENDED")) {
+             console.warn(`[Fallback AI - ${GEMINI_MODEL_NAME}] API key/project is suspended. Skipping further Gemini attempts until resolved.`);
+             // 可以考虑在这里设置一个临时标志，短时间内不再尝试 Gemini
+        }
+        return textToFormat; // 返回原始文本表示处理失败
     }
 }
 
@@ -198,7 +203,7 @@ async function handleImageRequest(req, res, fullPath) {
     try {
         const response = await axios.get(tmdbImageUrl, { responseType: 'stream' });
         res.setHeader('Content-Type', response.headers['content-type']);
-        res.setHeader('Cache-Control', 'public, max-age=31536000'); // 图像缓存可以长一些
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
         response.data.pipe(res);
     } catch (imageError) {
         console.error('[Image Handler] Error fetching image:', tmdbImageUrl, imageError.message);
@@ -209,27 +214,43 @@ async function handleImageRequest(req, res, fullPath) {
 }
 
 
-// --- Request Handlers (handleApiRequest 调用主 AI 函数，内部处理备用逻辑) ---
+// --- Request Handlers (handleApiRequest with Primary/Fallback Logic) ---
 async function handleApiRequest(req, res, originalFullPath) {
     let currentPath = originalFullPath;
     const authHeader = req.headers.authorization;
     const parsedUrl = new URL(originalFullPath, `http://${req.headers.host || 'localhost'}`);
     const pathname = parsedUrl.pathname;
+    let coreTitleFromAI = null; // 用于存储最终AI处理结果
+    let queryParamValue = null; // 存储原始 query 值
 
     // 检查是否需要 AI 处理 query 参数
-    if (GEMINI_FORMATTING_PATHS.includes(pathname)) {
+    if (AI_FORMATTING_PATHS.includes(pathname)) {
         try {
-            const urlObject = new URL(currentPath, 'http://localhost'); // 使用 currentPath 构建 URL 对象
-            const queryParamValue = urlObject.searchParams.get('query');
+            const urlObject = new URL(currentPath, 'http://localhost');
+            queryParamValue = urlObject.searchParams.get('query'); // 获取原始 query
 
             if (queryParamValue) {
                 const textToFormatForAI = queryParamValue;
-                console.log(`[API Handler] Original query for path "${pathname}" to be processed for core title: "${textToFormatForAI}"`);
+                console.log(`[API Handler] Original query for path "${pathname}" to be processed: "${textToFormatForAI}"`);
 
-                // 调用主 AI 函数 (内部包含备用逻辑)
-                const coreTitleFromAI = await callGoogleGeminiAPI(textToFormatForAI);
+                // --- Step 1: Try Primary AI (OpenAI Compatible) ---
+                coreTitleFromAI = await callOpenAICompatibleAPI(textToFormatForAI);
 
-                // 检查 AI 是否成功返回了不同的、非空的标题
+                // --- Step 2: Check Primary AI result, if failed or no change, try Fallback AI (Gemini) ---
+                // 如果主 AI 返回了原始文本 (表示失败或未配置)，则尝试备用 AI
+                if (coreTitleFromAI === textToFormatForAI) {
+                    console.log(`[API Handler] Primary AI (${OPENAI_MODEL_NAME || 'Not Configured'}) failed or returned original text. Attempting fallback AI.`);
+                    coreTitleFromAI = await callGoogleGeminiAPI(textToFormatForAI);
+
+                    // 如果备用 AI 也返回了原始文本 (表示失败或未配置)
+                    if (coreTitleFromAI === textToFormatForAI) {
+                         console.log(`[API Handler] Fallback AI (${GEMINI_MODEL_NAME || 'Not Configured'}) also failed or returned original text. Using original query.`);
+                         // coreTitleFromAI 保持为原始文本
+                    }
+                }
+
+                // --- Step 3: Apply the result if AI processing was successful and changed the query ---
+                // 检查最终的 AI 结果是否有效且与原始 query 不同
                 if (coreTitleFromAI && coreTitleFromAI.trim() !== "" && coreTitleFromAI !== queryParamValue) {
                     urlObject.searchParams.set('query', coreTitleFromAI);
                     currentPath = urlObject.pathname + urlObject.search; // 更新请求路径
@@ -237,8 +258,9 @@ async function handleApiRequest(req, res, originalFullPath) {
                 } else if (coreTitleFromAI === queryParamValue) {
                     console.log(`[API Handler] AI core title extraction resulted in no change for query: "${queryParamValue}"`);
                 } else {
-                    // AI 处理失败或返回空，使用原始 query
-                    console.log(`[API Handler] AI core title extraction failed or returned empty for: "${queryParamValue}". Using original query.`);
+                    // AI 处理失败或返回空，使用原始 query (coreTitleFromAI 此时等于 queryParamValue)
+                    console.log(`[API Handler] AI core title extraction failed or returned empty/invalid. Using original query: "${queryParamValue}"`);
+                    coreTitleFromAI = queryParamValue; // 确保使用原始值
                 }
             } else {
                  console.log(`[API Handler] No 'query' parameter found in path "${pathname}". Skipping AI processing.`);
@@ -246,18 +268,18 @@ async function handleApiRequest(req, res, originalFullPath) {
         } catch (e) {
             console.error("[API Handler] Error during query formatting pre-processing:", e.message);
             // 即使预处理失败，也应继续尝试使用原始路径访问 TMDB
+            coreTitleFromAI = queryParamValue; // 保证出错时使用原始 query (如果存在)
+            currentPath = originalFullPath; // 保证出错时使用原始路径
         }
     }
 
-    // --- 缓存逻辑 (使用可能被 AI 修改后的 currentPath) ---
-    const cacheKey = currentPath; // 使用最终的路径作为缓存键
+    // --- 缓存逻辑 (使用最终确定的 currentPath) ---
+    const cacheKey = currentPath;
 
-    // 检查缓存
     if (cache.has(cacheKey)) {
         const cachedItem = cache.get(cacheKey);
         if (Date.now() < cachedItem.expiry) {
             console.log('[Cache] Hit:', cacheKey);
-            // LRU: 重新设置以更新其在 Map 中的顺序
             cache.delete(cacheKey);
             cache.set(cacheKey, cachedItem);
             return res.status(200).json(cachedItem.data);
@@ -268,7 +290,7 @@ async function handleApiRequest(req, res, originalFullPath) {
     }
 
     // --- TMDB API 调用 ---
-    const tmdbUrl = `${TMDB_BASE_URL}${currentPath}`; // 使用最终路径
+    const tmdbUrl = `${TMDB_BASE_URL}${currentPath}`;
     const config = {};
     if (authHeader) {
         config.headers = { 'Authorization': authHeader };
@@ -277,9 +299,8 @@ async function handleApiRequest(req, res, originalFullPath) {
     console.log('[TMDB Proxy] Fetching from TMDB:', tmdbUrl);
     try {
         const response = await axios.get(tmdbUrl, config);
-        // 缓存成功的响应
         if (response.status === 200) {
-            checkCacheSizeAndEvict(); // 检查缓存大小
+            checkCacheSizeAndEvict();
             cache.set(cacheKey, {
                 data: response.data,
                 expiry: Date.now() + CACHE_DURATION
@@ -293,40 +314,34 @@ async function handleApiRequest(req, res, originalFullPath) {
         console.error('[TMDB Proxy] Error fetching from TMDB:', tmdbError.response ? JSON.stringify(tmdbError.response.data) : tmdbError.message);
         const status = tmdbError.response?.status || 500;
         const errorData = tmdbError.response?.data || { error: 'Failed to fetch data from TMDB.' };
-        // 返回更详细的错误信息
         res.status(status).json({
             message: `Error fetching from upstream TMDB API: ${tmdbError.message}`,
             upstream_status: status,
             upstream_details: errorData,
-            requested_url: tmdbUrl // 添加请求的 URL 方便调试
+            requested_url: tmdbUrl
         });
     }
 }
 
 // --- Main Export (无变化) ---
 module.exports = async (req, res) => {
-    // 设置 CORS 头
-    res.setHeader('Access-Control-Allow-Origin', '*'); // 允许所有来源，生产环境建议更严格控制
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS'); // 允许的方法
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); // 允许的请求头
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    // 处理 OPTIONS 预检请求
     if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;
     }
 
     try {
-        const fullPath = req.url; // 获取完整的请求路径，包括查询参数
-
-        // 路由：区分图片请求和 API 请求
+        const fullPath = req.url;
         if (fullPath.startsWith('/t/p/original/')) {
             await handleImageRequest(req, res, fullPath);
         } else {
             await handleApiRequest(req, res, fullPath);
         }
     } catch (error) {
-        // 通用错误处理，捕获未被具体处理函数捕获的异常
         console.error('[Main Export] General unhandled error:', error.message, error.stack);
         res.status(500).json({
             error: 'An unexpected general error occurred in the proxy.',
