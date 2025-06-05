@@ -1,3 +1,4 @@
+const axios = require('axios');
 const TMDB_BASE_URL = 'https://api.themoviedb.org';
 const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/original';
 
