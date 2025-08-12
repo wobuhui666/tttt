@@ -100,7 +100,7 @@ async function callOpenAICompatibleAPI(textToFormat) {
                 }
             ],
             temperature: 0.1,
-            max_tokens: 80,
+            max_tokens: 999999,
         };
 
         const response = await axios.post(OPENAI_API_ENDPOINT, requestBody, {
