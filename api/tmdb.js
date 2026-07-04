@@ -1,10 +1,11 @@
 const axios = require('axios');
 const TMDB_BASE_URL = 'https://api.themoviedb.org';
-const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/original';
+const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p';
 
 // --- Configuration ---
 const CACHE_DURATION = parseInt(process.env.CACHE_DURATION_MS, 10) || 10 * 60 * 1000;
 const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE, 10) || 1000;
+const TMDB_API_KEY = (process.env.TMDB_API_KEY || '').trim();
 
 // --- Primary OpenAI-Compatible API Configuration ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -51,6 +52,18 @@ function checkCacheSizeAndEvict() {
     }
 }
 setInterval(cleanExpiredCache, CACHE_DURATION);
+
+function buildTmdbUrl(path, authHeader) {
+    const url = new URL(path, TMDB_BASE_URL);
+    if (!authHeader && TMDB_API_KEY) {
+        url.searchParams.set('api_key', TMDB_API_KEY);
+    }
+    return url.toString();
+}
+
+function redactApiKey(value) {
+    return value.replace(/([?&]api_key=)[^&]*/g, '$1[REDACTED]');
+}
 
 // --- Shared Prompt for Title Cleaning (无变化) ---
 const CLEAN_TITLE_PROMPT = `请从以下影视搜索词中提取最核心的标题。务必移除所有与核心标题无关的附加信息，包括但不限于：
@@ -197,10 +210,16 @@ async function callGoogleGeminiAPI(textToFormat) {
     }
 }
 
-// --- Request Handlers (handleImageRequest 无变化) ---
+// --- Request Handlers ---
 async function handleImageRequest(req, res, fullPath) {
-    const imagePath = fullPath.replace('/t/p/original/', '');
-    const tmdbImageUrl = `${TMDB_IMAGE_BASE_URL}/${imagePath}`;
+    const imagePath = fullPath.split('?')[0];
+    const imageMatch = imagePath.match(/^\/t\/p\/([^/]+)\/(.+)$/);
+    if (!imageMatch) {
+        return res.status(400).json({ error: 'Invalid TMDB image path.' });
+    }
+
+    const [, size, filePath] = imageMatch;
+    const tmdbImageUrl = `${TMDB_IMAGE_BASE_URL}/${size}/${filePath}`;
     try {
         const response = await axios.get(tmdbImageUrl, { responseType: 'stream' });
         res.setHeader('Content-Type', response.headers['content-type']);
@@ -217,9 +236,10 @@ async function handleImageRequest(req, res, fullPath) {
 
 // --- Request Handlers (handleApiRequest with Primary/Fallback Logic) ---
 async function handleApiRequest(req, res, originalFullPath) {
-    let currentPath = originalFullPath;
     const authHeader = req.headers.authorization;
     const parsedUrl = new URL(originalFullPath, `http://${req.headers.host || 'localhost'}`);
+    parsedUrl.searchParams.delete('path');
+    let currentPath = parsedUrl.pathname + parsedUrl.search;
     const pathname = parsedUrl.pathname;
     let coreTitleFromAI = null; // 用于存储最终AI处理结果
     let queryParamValue = null; // 存储原始 query 值
@@ -270,7 +290,7 @@ async function handleApiRequest(req, res, originalFullPath) {
             console.error("[API Handler] Error during query formatting pre-processing:", e.message);
             // 即使预处理失败，也应继续尝试使用原始路径访问 TMDB
             coreTitleFromAI = queryParamValue; // 保证出错时使用原始 query (如果存在)
-            currentPath = originalFullPath; // 保证出错时使用原始路径
+            currentPath = parsedUrl.pathname + parsedUrl.search; // 保证出错时使用清理后的原始路径
         }
     }
 
@@ -280,24 +300,24 @@ async function handleApiRequest(req, res, originalFullPath) {
     if (cache.has(cacheKey)) {
         const cachedItem = cache.get(cacheKey);
         if (Date.now() < cachedItem.expiry) {
-            console.log('[Cache] Hit:', cacheKey);
+            console.log('[Cache] Hit:', redactApiKey(cacheKey));
             cache.delete(cacheKey);
             cache.set(cacheKey, cachedItem);
             return res.status(200).json(cachedItem.data);
         } else {
             cache.delete(cacheKey);
-            console.log('[Cache] Expired and deleted:', cacheKey);
+            console.log('[Cache] Expired and deleted:', redactApiKey(cacheKey));
         }
     }
 
     // --- TMDB API 调用 ---
-    const tmdbUrl = `${TMDB_BASE_URL}${currentPath}`;
+    const tmdbUrl = buildTmdbUrl(currentPath, authHeader);
     const config = {};
     if (authHeader) {
         config.headers = { 'Authorization': authHeader };
     }
 
-    console.log('[TMDB Proxy] Fetching from TMDB:', tmdbUrl);
+    console.log('[TMDB Proxy] Fetching from TMDB:', redactApiKey(tmdbUrl));
     try {
         const response = await axios.get(tmdbUrl, config);
         if (response.status === 200) {
@@ -306,9 +326,9 @@ async function handleApiRequest(req, res, originalFullPath) {
                 data: response.data,
                 expiry: Date.now() + CACHE_DURATION
             });
-            console.log('[Cache] Miss and stored:', cacheKey);
+            console.log('[Cache] Miss and stored:', redactApiKey(cacheKey));
         } else {
-            console.log('[TMDB Proxy] Response not cached (non-200 status):', response.status, cacheKey);
+            console.log('[TMDB Proxy] Response not cached (non-200 status):', response.status, redactApiKey(cacheKey));
         }
         res.status(response.status).json(response.data);
     } catch (tmdbError) {
@@ -319,7 +339,7 @@ async function handleApiRequest(req, res, originalFullPath) {
             message: `Error fetching from upstream TMDB API: ${tmdbError.message}`,
             upstream_status: status,
             upstream_details: errorData,
-            requested_url: tmdbUrl
+            requested_url: redactApiKey(tmdbUrl)
         });
     }
 }
@@ -337,7 +357,7 @@ module.exports = async (req, res) => {
 
     try {
         const fullPath = req.url;
-        if (fullPath.startsWith('/t/p/original/')) {
+        if (fullPath.startsWith('/t/p/')) {
             await handleImageRequest(req, res, fullPath);
         } else {
             await handleApiRequest(req, res, fullPath);
