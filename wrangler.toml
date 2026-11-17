@@ -1,10 +1,22 @@
-name = "tmdb-proxy-worker"
+name = "tttt"
 main = "worker.js"
-compatibility_date = "2026-07-04"
+compatibility_date = "2026-11-14"
+
+[ai]
+binding = "AI"
 
 [vars]
+PRIMARY_API_BASE_URL = "https://nnnn.114514heihei.eu.org/v1"
+PRIMARY_MODEL = "fast"
+PRIMARY_REASONING_EFFORT = "low"
+PRIMARY_TIMEOUT_MS = "1200"
+GROQ_MODEL = "qwen/qwen3.8-27b"
+GROQ_REASONING_EFFORT = "none"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
+TITLE_AI_BUDGET_MS = "2500"
+GROQ_TIMEOUT_MS = "600"
+WORKERS_AI_TIMEOUT_MS = "1800"
+TMDB_TIMEOUT_MS = "4000"
+PROXY_TIMEOUT_MS = "6500"
 CACHE_DURATION_MS = "600000"
 MAX_CACHE_SIZE = "1000"
-# GEMINI_MODEL_NAME = "gemini-2.0-flash"
-# OPENAI_API_BASE_URL = "https://api.openai.com/v1"
-# OPENAI_MODEL_NAME = "gpt-4o-mini"

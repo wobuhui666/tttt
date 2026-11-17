@@ -1,14 +1,15 @@
 {
-    "name": "tmdb-proxy",
-    "version": "1.0.0",
-    "description": "TMDB API proxy service",
+    "name": "tttt",
+    "version": "2.0.0",
+    "description": "TMDB middleware with bounded fast title normalization, Groq and Workers AI fallbacks",
     "main": "api/tmdb.js",
+    "engines": {
+        "node": "24.x"
+    },
     "scripts": {
         "dev:worker": "npx wrangler dev",
         "deploy:worker": "npx wrangler deploy",
-        "test": "node --check api/tmdb.js && node --check worker.js"
-    },
-    "dependencies": {
-        "axios": "^1.6.7"
+        "check": "node --check api/tmdb.js && node --check lib/proxy.mjs && node --input-type=module --check < worker.js",
+        "test": "node --test test/*.test.mjs"
     }
 }
